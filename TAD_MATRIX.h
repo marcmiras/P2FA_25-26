@@ -8,5 +8,11 @@
 #ifndef TAD_MATRIX_H
 #define	TAD_MATRIX_H
 
+// VARIABLES
+extern unsigned char estat;
+
+// FUNCIONS
+
+
 #endif	/* TAD_MATRIX_H */
 
