@@ -14,8 +14,10 @@
 
 void main(void) {
     
-    //TI_Init();
+    TI_Init();
     KP_Init();
+    INT_Init();
+    LED_Init();
     //SP_Init();
     
     while(1) {

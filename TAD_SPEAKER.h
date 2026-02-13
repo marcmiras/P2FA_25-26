@@ -8,16 +8,11 @@
 #ifndef TAD_SPEAKER_H
 #define	TAD_SPEAKER_H
 
-#ifdef	__cplusplus
-extern "C" {
-#endif
+// VARIABLES
 
 
-
-
-#ifdef	__cplusplus
-}
-#endif
+// FUNCIONS
+void SP_Init();
 
 #endif	/* TAD_SPEAKER_H */
 
