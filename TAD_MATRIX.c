@@ -9,23 +9,25 @@
 #include "TAD_TIMER.h"
 #include "pic18f4321.h"
 
-// Rows
-#define R0 TRISDbits.TRISD0
-#define R1 TRISDbits.TRISD1
-#define R2 TRISDbits.TRISD2
-#define R3 TRISDbits.TRISD3
+#define MULTITAP_TIMEOUT  1000 // 1 segon per acceptar la lletra
+#define BOUNCE_TIME  15 // 1 segon per acceptar la lletra
 
-// Columns
-#define C0 TRISCbits.TRISC0
-#define C1 TRISCbits.TRISC1
-#define C2 TRISCbits.TRISC2
+typedef enum {
+    ESTAT_REPOS,
+    ESTAT_REBOTS,     
+    ESTAT_ESPERA,
+    ESTAT_TECLA
+} KP_estat;
 
 // Variables locals
-static unsigned char change;
-static unsigned char State;
+static unsigned char state;
 static unsigned char key;
-static unsigned char saved_col;
-static unsigned char saved_row;
+
+static unsigned char last_c;
+static unsigned char last_r;
+
+static unsigned char c;
+static unsigned char r;
 
 // Loop variables
 static unsigned char i = 0;
@@ -33,6 +35,7 @@ static unsigned char j = 0;
 
 // Variable auxiliar de temps
 static unsigned long aux_time = 0;
+static unsigned long last_press_time;
 
 // Temporal, hauria de venir d'algun lloc
 static unsigned char tmr_handle;
@@ -58,11 +61,14 @@ const static unsigned char layout_teclat[4][3][6] = {
 };
 
 void KP_Init() {    
-    // Rows
-    TRISDbits.TRISD0 = 1; TRISDbits.TRISD1 = 1; TRISDbits.TRISD2 = 1; TRISDbits.TRISD3 = 1;
+    // TRIS: Files Output, Cols Input
+    TRISDbits.TRISD0 = 0; TRISDbits.TRISD1 = 0; TRISDbits.TRISD2 = 0; TRISDbits.TRISD3 = 0;
+    TRISBbits.TRISB0 = 1; TRISBbits.TRISB1 = 1; TRISBbits.TRISB2 = 1;
     
-    // Columns
-    TRISCbits.TRISC0 = 0; TRISCbits.TRISC1 = 0; TRISCbits.TRISC2 = 0;
+    INTCON2bits.RBPU = 0; // Pull-ups actives
+    
+    // Files a 1 (Repòs)
+    LATDbits.LATD0 = 1; LATDbits.LATD1 = 1; LATDbits.LATD2 = 1; LATDbits.LATD3 = 1;
     
     TI_NewTimer(&tmr_handle);
 }
@@ -70,87 +76,99 @@ void KP_Init() {
 unsigned char KP_loopRows(unsigned char row) {
     LATDbits.LATD0 = 1; LATDbits.LATD1 = 1; LATDbits.LATD2 = 1; LATDbits.LATD3 = 1;
     
-    if (row++ == 0) LATDbits.LATD0 = 0;
-    if (row++ == 1) LATDbits.LATD1 = 0;
-    if (row++ == 2) LATDbits.LATD2 = 0;
-    if (row == 3) { 
-        LATDbits.LATD3 = 0;   
-        row = 0;
-    }    
-    
+    switch (row) {
+        case 0: LATDbits.LATD0 = 0; break;
+        case 1: LATDbits.LATD1 = 0; break;
+        case 2: LATDbits.LATD2 = 0; break;
+        case 3: LATDbits.LATD3 = 0; row = 0; break;
+    }
+
     return row;
 }
 
-// Complete after getting KP and Bounces done
-unsigned char KP_getKey(unsigned char row, unsigned char col, unsigned char i) {
-    unsigned char key;
-    
-    return layout_teclat[][][i];
+void KP_getCol(unsigned char *c) {
+    if (!PORTBbits.RB0) *c = 0;
+    if (!PORTBbits.RB1) *c = 1;
+    if (!PORTBbits.RB2) *c = 2;
 }
 
-unsigned char KP_getRow() {
-    // Completar LLEGIR COLUMNA
+void KP_setRow(unsigned char row, unsigned char val) {
+    // Val = 0 (Activa), Val = 1 (Desactiva)
+    switch(row) {
+        case 0: LATDbits.LATD0 = val; break;
+        case 1: LATDbits.LATD1 = val; break;
+        case 2: LATDbits.LATD2 = val; break;
+        case 3: LATDbits.LATD3 = val; break;
+    }
 }
 
-unsigned char KP_isPressed() {
-    return ((!C0 && !C1 && !C2) ? 0 : 1);
+unsigned char KP_pressed() {
+    return ((!PORTBbits.RB0 & !PORTBbits.RB1 & !PORTBbits.RB2) ? 0 : 1);
 }
 
 void KP_Motor() {
-   
-    switch (State) {
-        // Escombratge
-        case 0:
+    unsigned long now = TI_GetTics(tmr_handle);
+    
+    switch (state) {
+        // --- ESTAT 0: REPOS ---
+        case ESTAT_REPOS:
             aux_time = 0;
             j = KP_loopRows(j);
-            if (KP_isPressed()) {
-                state = 1;
+            
+            if (KP_pressed()) {
+                r = j;
                 
+                KP_getCol(&c);
+                state = ESTAT_REBOTS;
+                TI_ResetTics(tmr_handle);
             }    
-       
             break;
             
-        // Check Key Pressed / Check Release  
-        case 1: 
-            TI_ResetTics(tmr_handle);
-            
-            if ((TI_GetTics(tmr_handle) - aux_time) >= 15) {
-                if (!KP_isPressed()) {
-                    if (!flag.debounce) state = 0;
+        // --- ESTAT 1: REBOTS ---
+        case ESTAT_REBOTS: 
+            if ((TI_GetTics(tmr_handle) - aux_time) >= BOUNCE_TIME) {
+                if (!KP_pressed()) {
+                    if (!flag.debounce) state = ESTAT_REPOS;
                     else {
-                        state = 3;
+                        state = ESTAT_TECLA;
                         flag.debounce = 0;
-                    }    
-                if (KP_isPressed()) {
-                    state = 2;
+                    }
+                }    
+                if (KP_pressed()) {
+                    state = ESTAT_ESPERA;
                     if (!flag.debounce) TI_ResetTics(tmr_handle);
                 }    
             }
             break;
             
-        // Count Key Pressed    
-        case 2:
-            if (!KP_isPressed()) {
+        // --- ESTAT 2: ESPERA (HOLD) ---  
+        case ESTAT_ESPERA:
+            if (!KP_pressed()) {
                 aux_time = TI_GetTics(tmr_handle);
                 flag.debounce = 1;
-                state = 1;
+                state = ESTAT_REBOTS;
+                TI_ResetTics(tmr_handle);
             }    
             break;
         
-        // Check how many times is pressed  
-        case 3:  
+        // --- ESTAT 3: LOGICA MULTITAP ---
+        case ESTAT_TECLA:  
+            if ((aux_time >= MULTITAP_TIMEOUT) && (c == last_c) && (r == last_r)) {
+                i++; // Següent lletra
+                
+                if (layout_teclat[r][c][i] == '\0') i = 0; // Reset si és buit (final)
+            }
+            else i = 0; // Lletra nova o > 1 segon
+            
+            last_c = c;
+            last_r = r;
+            
+            key = layout_teclat[r][c][i];
+            
+            state = ESTAT_REPOS;
             TI_ResetTics(tmr_handle);
             
-            if (aux_time >= 1000) {
-               key = getKey();
-            }
-            else {
-                i++
-            };     
-            
             break;
-     
     } 
-    
-    return void;
+    return;
 }
